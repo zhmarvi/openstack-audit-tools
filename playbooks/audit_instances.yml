@@ -1,0 +1,138 @@
+---
+- name: Collect Nova instance directory evidence
+  hosts: "{{ nova_compute_group | default('nova_compute') }}"
+  gather_facts: false
+  become: true
+
+  vars:
+    instances_path: /var/lib/nova/instances
+    output_dir: "{{ playbook_dir }}/audit-data"
+    collect_directory_sizes: false
+
+  tasks:
+    - name: Create the controller-side output directory
+      ansible.builtin.file:
+        path: "{{ output_dir }}"
+        state: directory
+        mode: "0750"
+      delegate_to: localhost
+      become: false
+      run_once: true
+
+    - name: Collect short and fully-qualified hostnames
+      ansible.builtin.shell: |
+        printf 'SHORT\t'
+        hostname -s 2>/dev/null || true
+        printf 'FQDN\t'
+        hostname -f 2>/dev/null || true
+      args:
+        executable: /bin/bash
+      register: host_names
+      changed_when: false
+      failed_when: false
+
+    - name: Check the configured instances path
+      ansible.builtin.stat:
+        path: "{{ instances_path }}"
+        follow: false
+        get_checksum: false
+      register: instances_stat
+
+    - name: Collect the instances path mount information
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - -T
+          - "{{ instances_path }}"
+          - -no
+          - SOURCE,FSTYPE,OPTIONS
+      register: mount_info
+      changed_when: false
+      failed_when: false
+
+    - name: Collect immediate child directories
+      ansible.builtin.shell: >-
+        find -P {{ instances_path | quote }} -mindepth 1 -maxdepth 1
+        -type d -printf '%f\t%T@\t%u\t%g\t%M\n'
+      register: instance_directories
+      changed_when: false
+      failed_when: false
+
+    - name: Collect files one level below each instance directory
+      ansible.builtin.shell: >-
+        find -P {{ instances_path | quote }} -mindepth 2 -maxdepth 2
+        -type f -printf '%P\t%s\t%T@\n'
+      register: instance_entries
+      changed_when: false
+      failed_when: false
+
+    - name: Collect libvirt domain UUIDs and states
+      ansible.builtin.shell: |
+        domain_rc=0
+        domain_names="$(virsh list --all --name 2>/dev/null)" || domain_rc=$?
+        printf 'VIRSH_RC\t%s\n' "$domain_rc"
+
+        if [ "$domain_rc" -eq 0 ]; then
+          while IFS= read -r domain_name; do
+            [ -n "$domain_name" ] || continue
+            domain_uuid="$(virsh domuuid "$domain_name" 2>/dev/null \
+              | tr -d '\r' | head -n 1)"
+            domain_state="$(virsh domstate "$domain_name" 2>/dev/null \
+              | tr '\n' ' ' | sed 's/[[:space:]]*$//')"
+            printf 'DOMAIN\t%s\t%s\t%s\n' \
+              "$domain_name" "$domain_uuid" "$domain_state"
+          done <<< "$domain_names"
+        fi
+      args:
+        executable: /bin/bash
+      register: libvirt_domains
+      changed_when: false
+      failed_when: false
+
+    - name: Optionally collect apparent directory sizes
+      ansible.builtin.shell: |
+        for directory in {{ instances_path | quote }}/*; do
+          [ -d "$directory" ] || continue
+          directory_name="${directory##*/}"
+          bytes="$(du -sx -B1 "$directory" 2>/dev/null \
+            | awk 'NR == 1 {print $1}')"
+          [ -n "$bytes" ] || continue
+          printf 'SIZE\t%s\t%s\n' "$directory_name" "$bytes"
+        done
+      args:
+        executable: /bin/bash
+      register: directory_sizes
+      changed_when: false
+      failed_when: false
+      when: collect_directory_sizes | bool
+
+    - name: Write one structured collection file per compute
+      ansible.builtin.copy:
+        dest: >-
+          {{ output_dir }}/{{ inventory_hostname
+          | regex_replace('[^A-Za-z0-9_.-]', '_') }}.json
+        mode: "0640"
+        content: >-
+          {{ {
+            'schema_version': 1,
+            'collected_at': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ'),
+            'inventory_hostname': inventory_hostname,
+            'ansible_host': ansible_host | default(inventory_hostname),
+            'instances_path': instances_path,
+            'path_exists': instances_stat.stat.exists | default(false),
+            'host_names': host_names.stdout_lines | default([]),
+            'mount': mount_info.stdout | default(''),
+            'directories': instance_directories.stdout | default(''),
+            'entries': instance_entries.stdout | default(''),
+            'libvirt': libvirt_domains.stdout | default(''),
+            'sizes': directory_sizes.stdout | default(''),
+            'commands': {
+              'mount_rc': mount_info.rc | default(-1),
+              'directories_rc': instance_directories.rc | default(-1),
+              'entries_rc': instance_entries.rc | default(-1),
+              'libvirt_rc': libvirt_domains.rc | default(-1),
+              'sizes_rc': directory_sizes.rc | default(0)
+            }
+          } | to_nice_json }}
+      delegate_to: localhost
+      become: false

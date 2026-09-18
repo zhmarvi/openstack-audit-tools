@@ -1,0 +1,5 @@
+openstacksdk>=1.0
+SQLAlchemy>=1.4
+PyMySQL>=1.0
+# Install a PostgreSQL driver too when Nova/Cinder use PostgreSQL:
+# psycopg2-binary>=2.9
