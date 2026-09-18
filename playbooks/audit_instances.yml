@@ -6,7 +6,7 @@
 
   vars:
     instances_path: /var/lib/nova/instances
-    output_dir: "{{ playbook_dir }}/audit-data"
+    output_dir: "{{ playbook_dir }}/../audit-data"
     collect_directory_sizes: false
 
   tasks:

@@ -1,0 +1,15 @@
+---
+# Ansible Galaxy requirements for the audit playbooks.
+#
+# The playbooks only use modules from ansible.builtin, which ships with
+# ansible-core, so no external collections are strictly required today. This
+# file documents the baseline and gives a place to pin collections if the
+# playbooks grow.
+#
+# Baseline: ansible-core >= 2.14 (install with `pip install ansible-core`).
+#
+# Install any listed collections with:
+#   ansible-galaxy collection install -r requirements.yml
+
+collections: []
+  # - name: ansible.builtin   # bundled with ansible-core; listed for reference

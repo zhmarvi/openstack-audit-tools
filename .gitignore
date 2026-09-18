@@ -1,2 +1,12 @@
 # Ignore Python bytecode compilation caches
 __pycache__/
+
+# Collected audit evidence (per-node JSON written by the playbooks)
+audit-data/
+playbooks/audit-data/
+
+# Local Ansible inventory (keep the .example version, ignore the real one)
+inventory/hosts.ini
+
+# Python virtualenv used to run the scripts
+.venv/
